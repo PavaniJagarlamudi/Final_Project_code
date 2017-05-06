@@ -1,0 +1,101 @@
+from pymongo import MongoClient
+
+import MFRC522
+import signal
+import os
+import time
+import RPi.GPIO as GPIO                    #Import GPIO library
+
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BOARD)                     #Set GPIO pin numbering
+GPIO.setup(37,GPIO.OUT)
+GPIO.setup(40,GPIO.OUT)
+TRIG = 16                                  #Associate pin 23 to TRIG
+ECHO = 18                                  #Associate pin 24 to ECHO
+
+#print "Distance measurement in progress"
+
+GPIO.setup(TRIG,GPIO.OUT)                  #Set pin as GPIO out
+GPIO.setup(ECHO,GPIO.IN)                   #Set pin as GPIO in
+
+
+def end_read(signal,frame):
+    global continue_reading
+    print "Ctrl+C captured, ending read"
+    continue_reading = False
+    GPIO.cleanup()
+
+signal.signal(signal.SIGINT, end_read)
+
+MIFAREReader = MFRC522.MFRC522()
+
+client = MongoClient('mongodb://pavani:pavani@ds115701.mlab.com:15701/parkinfo')
+
+# data base name : 'test-database-1'
+mydb = client['parkinfo']
+print "Welcome to id reading"
+print "Press Ctrl+C to stop."
+
+global obj
+global temp
+while True:
+
+  GPIO.output(TRIG, False)                 #Set TRIG as LOW
+  print "Waitng For Sensor To Settle"
+  time.sleep(2)                            #Delay of 2 seconds
+
+  GPIO.output(TRIG, True)                  #Set TRIG as HIGH
+  time.sleep(0.00001)                      #Delay of 0.00001 seconds
+  GPIO.output(TRIG, False)                 #Set TRIG as LOW
+
+  while GPIO.input(ECHO)==0:               #Check whether the ECHO is LOW
+    pulse_start = time.time()              #Saves the last known time of LOW pulse
+
+  while GPIO.input(ECHO)==1:               #Check whether the ECHO is HIGH
+    pulse_end = time.time()                #Saves the last known time of HIGH pulse
+
+  pulse_duration = pulse_end - pulse_start #Get pulse duration to a variable
+
+  distance = pulse_duration * 17150        #Multiply pulse duration by 17150 to get distance
+  distance = round(distance, 2)            #Round to two decimal points
+
+  (status,TagType) = MIFAREReader.MFRC522_Request(MIFAREReader.PICC_REQIDL)
+  if status == MIFAREReader.MI_OK:
+        print "Card detected"
+        (status,uid) = MIFAREReader.MFRC522_Anticoll()
+        print "Card read UID: "+str(uid[0])+","+str(uid[1])+","+str(uid[2])+","+str(uid[3])
+        key1=str(uid[0])+","+str(uid[1])+","+str(uid[2])+","+str(uid[3])
+        print key1
+        temp=str(uid[0])
+        obj =mydb.parkinfo.find_one({"parkSlotId":"villanova-02"})
+
+
+  if distance > 2 and distance < 50:      #Check whether the distance is within range
+             print "Distance:",distance - 0.5,"cm"  #Print distance with 0.5 cm calibration
+             print "Parking Filled"
+             if obj != None:
+                #print "Im a  dead object"
+                for key2, value in obj.items():
+                        if key2 == "assignedTagId":
+                                print 'value',value
+                                print 'temp',temp
+                                if value == temp:
+
+                                        GPIO.output(40,0)
+                                        GPIO.output(37, 1)
+                                        mydb.parkinfo.update({'parkSlotId':'villanova-02'},{'$set':{'isParkingAvailable':'0'}})
+                                        print "I just parked my car !!!!!!!!!!!!!!!!!!!!!!"
+                                else:
+                                        print "Warning !! Picked wrong one !! You owe me 30000$"
+             time.sleep(1)
+
+
+  else:
+             print "Out Of Range"                   #display out of range
+             print "Parking Available"
+             GPIO.output(40, 1)
+             GPIO.output(37,0)
+             mydb.parkinfo.update({'parkSlotId':'villanova-02'},{'$set':{'isParkingAvailable':'1'}})
+             time.sleep(1)
+
+
